@@ -4,6 +4,8 @@ pragma solidity ^0.8.20;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract BasicPool is Ownable, ERC20 {
     // Token addresses
@@ -22,6 +24,12 @@ contract BasicPool is Ownable, ERC20 {
 
     // Mapping to store accrued rewards per LP
     mapping(address => uint256) public pendingRewards;
+
+    // Tracks accumulated rewards per LP share
+    uint256 public totalRewardPerShare;
+
+    // Tracks last claimed reward per user
+    mapping(address => uint256) public lastRewardPerShare;
 
     // Reward rate: 1% of swap volume goes to LPs as rewards
     uint256 private constant rewardRate = 100; // 100 = 1% (1e4 = 100%)
@@ -85,6 +93,10 @@ contract BasicPool is Ownable, ERC20 {
         // Update reserves and LP tokens
         reservoirA += amountA;
         reservoirB += amountB;
+
+        // Update rewards before changing LP balance
+        _updateReward(msg.sender);
+
         lpbalanceOf[msg.sender] += liquidity;
         pooltotalSupply += liquidity;
 
@@ -143,6 +155,9 @@ contract BasicPool is Ownable, ERC20 {
     function removeLiquidity(uint256 liquidity) external {
         require(liquidity > 0, "Liquidity must be > 0");
 
+        // Update rewards before changing LP balance
+        _updateReward(msg.sender);
+
         // Calculate user's share of reserves
         uint256 amountA = (reservoirA * liquidity) / pooltotalSupply;
         uint256 amountB = (reservoirB * liquidity) / pooltotalSupply;
@@ -164,28 +179,19 @@ contract BasicPool is Ownable, ERC20 {
     function _mintRewards(uint256 swapVolume) internal {
         // Total reward = swapVolume * rewardRate / 1e4 (e.g., 1% of swap volume)
         uint256 totalReward = (swapVolume * rewardRate) / 10000;
-
-        // Distribute rewards proportionally to all LPs
         if (pooltotalSupply > 0 && totalReward > 0) {
-            // Calculate reward per liquidity unit
-            uint256 rewardPerUnit = totalReward / pooltotalSupply;
-
-            // Distribute rewards only to active LPs
-            if (lpbalanceOf[msg.sender] > 0) {
-                pendingRewards[msg.sender] +=
-                    rewardPerUnit *
-                    lpbalanceOf[msg.sender];
-            }
+            totalRewardPerShare += (totalReward * 1e18) / pooltotalSupply; // Precision factor
+            _mint(address(this), totalReward); // Mint to contract
         }
     }
 
     // Function to claim rewards
     function claimRewards() external {
-        uint256 rewards = pendingRewards[msg.sender];
-        require(rewards > 0, "No rewards to claim");
-
-        pendingRewards[msg.sender] = 0;
-        _mint(msg.sender, rewards);
+        uint256 unclaimed = ((totalRewardPerShare -
+            lastRewardPerShare[msg.sender]) * lpbalanceOf[msg.sender]) / 1e18;
+        require(unclaimed > 0, "No rewards");
+        lastRewardPerShare[msg.sender] = totalRewardPerShare;
+        _transfer(address(this), msg.sender, unclaimed);
     }
 
     // Helper functions
@@ -200,5 +206,12 @@ contract BasicPool is Ownable, ERC20 {
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;
+    }
+
+    function _updateReward(address user) internal {
+        uint256 accrued = ((totalRewardPerShare - lastRewardPerShare[user]) *
+            lpbalanceOf[user]) / 1e18;
+        pendingRewards[user] += accrued;
+        lastRewardPerShare[user] = totalRewardPerShare;
     }
 }
