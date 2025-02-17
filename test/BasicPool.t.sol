@@ -94,6 +94,11 @@ contract BasicPoolTest is Test {
         Slippage is basically the difference between the price 
         you expect to pay/receive for a trade and the actual price 
         you get when the trade executes.
+
+        What Causes Slippage?
+        1. Large Orders: Big trades drain liquidity from pools, changing the price.
+        2. Low Liquidity: Small pools = prices move more with each trade.
+        3. Time Delays: Prices can change between when you submit a trade and when it executes.
         */
 
         // Setup liquidity
