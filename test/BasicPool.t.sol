@@ -53,4 +53,51 @@ contract BasicPoolTest is Test {
             tokenB.approve(address(pool), type(uint256).max);
         }
     }
+
+    function test_AddLiquidity() public {
+        // Test initial liquidity addition
+        uint256 amountA = 100 ether;
+        uint256 amountB = 100 ether;
+
+        vm.prank(lps[0]);
+        pool.addLiquidity(amountA, amountB);
+
+        assertEq(
+            pool.totalSupply(),
+            sqrt(amountA * amountB),
+            "Incorrect initial LP tokens"
+        );
+        assertEq(pool.reservoirA(), amountA, "Incorrect Token A reserve");
+        assertEq(pool.reservoirB(), amountB, "Incorrect Token B reserve");
+    }
+
+    function test_MultipleLiquidityProviders() public {
+        // First LP
+        vm.prank(lps[0]);
+        pool.addLiquidity(100 ether, 100 ether);
+        uint256 initialLp = pool.totalSupply();
+
+        console.log("Initial LP: ", initialLp);
+
+        // Second LP
+        vm.prank(lps[1]);
+        pool.addLiquidity(50 ether, 50 ether);
+
+        assertApproxEqRel(
+            pool.balanceOf(lps[1]),
+            initialLp / 2,
+            1e16, // 1% tolerance
+            "Second LP should get half of initial LP tokens"
+        );
+    }
+
+    // Helper function for approximate square root
+    function sqrt(uint256 x) private pure returns (uint256 y) {
+        uint256 z = (x + 1) / 2;
+        y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        }
+    }
 }
