@@ -88,6 +88,88 @@ contract BasicPool is Ownable, ERC20 {
         emit LiquidityAdded(msg.sender, amountA, amountB, liquidity);
     }
 
+    // Swap Token A for Token B (with LP rewards)
+    function swapAForB(uint256 amountAIn) external {
+        require(amountAIn > 0, "Amount must be > 0");
+
+        // Transfer Token A from user to contract
+        tokenA.transferFrom(msg.sender, address(this), amountAIn);
+
+        // Calculate Token B output using x * y = k
+        uint256 amountBOut = (reservoirB * amountAIn) /
+            (reservoirA + amountAIn);
+
+        // Update reserves
+        reservoirA += amountAIn;
+        reservoirB -= amountBOut;
+
+        // Transfer Token B to user
+        tokenB.transfer(msg.sender, amountBOut);
+
+        // Mint rewardToken to LPs based on swap volume and LP share
+        _mintRewards(amountAIn);
+
+        emit Swapped(msg.sender, amountAIn, amountBOut, rewardRate);
+    }
+
+    // Swap Token B for Token A (with LP rewards)
+    function swapBForA(uint256 amountBIn) external {
+        require(amountBIn > 0, "Amount must be > 0");
+
+        // Transfer Token B from user to contract
+        tokenB.transferFrom(msg.sender, address(this), amountBIn);
+
+        // Calculate Token A output using x * y = k
+        uint256 amountAOut = (reservoirA * amountBIn) /
+            (reservoirB + amountBIn);
+
+        // Update reserves
+        reservoirB += amountBIn;
+        reservoirA -= amountAOut;
+
+        // Transfer Token A to user
+        tokenA.transfer(msg.sender, amountAOut);
+
+        // Mint rewardToken to LPs based on swap volume and LP share
+        _mintRewards(amountBIn);
+
+        emit Swapped(msg.sender, amountBIn, amountAOut, rewardRate);
+    }
+
+    // Remove liquidity from the pool
+    function removeLiquidity(uint256 liquidity) external {
+        require(liquidity > 0, "Liquidity must be > 0");
+
+        // Calculate user's share of reserves
+        uint256 amountA = (reservoirA * liquidity) / pooltotalSupply;
+        uint256 amountB = (reservoirB * liquidity) / pooltotalSupply;
+
+        // Burn LP tokens and update reserves
+        lpbalanceOf[msg.sender] -= liquidity;
+        pooltotalSupply -= liquidity;
+        reservoirA -= amountA;
+        reservoirB -= amountB;
+
+        // Transfer tokens back to user
+        tokenA.transfer(msg.sender, amountA);
+        tokenB.transfer(msg.sender, amountB);
+
+        emit LiquidityRemoved(msg.sender, amountA, amountB, liquidity);
+    }
+
+    // Mint rewards to LPs based on their share and swap volume
+    function _mintRewards(uint256 swapVolume) internal {
+        // Total reward = swapVolume * rewardRate / 1e4 (e.g., 1% of swap volume)
+        uint256 totalReward = (swapVolume * rewardRate) / 10000;
+
+        // Distribute rewards proportionally to all LPs
+        if (pooltotalSupply > 0 && totalReward > 0) {
+            // Distribute to LPs based on their share (simplified example)
+            uint256 rewardPerLP = totalReward / pooltotalSupply;
+            _mint(msg.sender, rewardPerLP * lpbalanceOf[msg.sender]);
+        }
+    }
+
     // Helper functions
     function sqrt(uint256 x) internal pure returns (uint256 y) {
         uint256 z = (x + 1) / 2;
