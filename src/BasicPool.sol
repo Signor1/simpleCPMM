@@ -7,37 +7,27 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract BasicPool is Ownable, ERC20 {
+contract BasicPool is Ownable, ERC20, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     // Token addresses
     IERC20 public tokenA;
     IERC20 public tokenB;
 
-    // Reservoirs of Token A and Token B
+    // Pool reserves
     uint256 public reservoirA;
     uint256 public reservoirB;
 
-    // Total supply of liquidity tokens (LP tokens)
-    uint256 public pooltotalSupply;
-
-    // Track user's LP share
-    mapping(address => uint256) public lpbalanceOf;
-
-    // Mapping to store accrued rewards per LP
-    mapping(address => uint256) public pendingRewards;
-
-    // Tracks accumulated rewards per LP share
-    uint256 public totalRewardPerShare;
-
-    // Tracks last claimed reward per user
+    // Reward tracking
+    uint256 public totalRewardPerShare; // 1e18 precision
     mapping(address => uint256) public lastRewardPerShare;
-
-    // Reward rate: 1% of swap volume goes to LPs as rewards
-    uint256 private constant rewardRate = 100; // 100 = 1% (1e4 = 100%)
+    mapping(address => uint256) public pendingRewards;
+    uint256 private constant rewardRate = 100; // 1% (1e4 = 100%)
 
     // Constructor
     // ERC20 - Pool Reward Token for rewarding liquidity providers on each swap
     // Ownable - Pool is owned by the deployer, access to some functions controlled by Ownable
-    constructor() ERC20("Pool Reward Token", "PRT") Ownable(msg.sender) {}
+    constructor() ERC20("Pool LP Token", "PLP") Ownable(msg.sender) {}
 
     // Events
     event LiquidityAdded(
@@ -58,6 +48,7 @@ contract BasicPool is Ownable, ERC20 {
         uint256 amountB,
         uint256 liquidity
     );
+    event RewardsClaimed(address indexed user, uint256 amount);
 
     // Set Token A address (onlyOwner)
     function setTokenA(address _tokenA) external onlyOwner {
@@ -72,129 +63,128 @@ contract BasicPool is Ownable, ERC20 {
     }
 
     // Add liquidity to the pool
-    function addLiquidity(uint256 amountA, uint256 amountB) external {
+    function addLiquidity(
+        uint256 amountA,
+        uint256 amountB
+    ) external nonReentrant {
         require(amountA > 0 && amountB > 0, "Amounts must be > 0");
 
-        // Transfer tokens from user to contract
-        tokenA.transferFrom(msg.sender, address(this), amountA);
-        tokenB.transferFrom(msg.sender, address(this), amountB);
+        _updateReward(msg.sender);
 
-        // Calculate LP tokens to mint (proportional to liquidity added)
+        // Transfer tokens
+        tokenA.safeTransferFrom(msg.sender, address(this), amountA);
+        tokenB.safeTransferFrom(msg.sender, address(this), amountB);
+
+        // Calculate LP tokens
         uint256 liquidity;
-        if (pooltotalSupply == 0) {
-            liquidity = sqrt(amountA * amountB); // Initial liquidity
+        if (totalSupply() == 0) {
+            liquidity = sqrt(amountA * amountB);
         } else {
             liquidity = min(
-                (amountA * pooltotalSupply) / reservoirA,
-                (amountB * pooltotalSupply) / reservoirB
+                (amountA * totalSupply()) / reservoirA,
+                (amountB * totalSupply()) / reservoirB
             );
         }
 
-        // Update reserves and LP tokens
+        // Update reserves and mint LP tokens
         reservoirA += amountA;
         reservoirB += amountB;
-
-        // Update rewards before changing LP balance
-        _updateReward(msg.sender);
-
-        lpbalanceOf[msg.sender] += liquidity;
-        pooltotalSupply += liquidity;
+        _mint(msg.sender, liquidity);
 
         emit LiquidityAdded(msg.sender, amountA, amountB, liquidity);
     }
 
-    // Swap Token A for Token B (with LP rewards)
-    function swapAForB(uint256 amountAIn) external {
+    // Swap Token A for Token B with slippage protection
+    function swapAForB(
+        uint256 amountAIn,
+        uint256 minAmountBOut
+    ) external nonReentrant {
         require(amountAIn > 0, "Amount must be > 0");
 
-        // Transfer Token A from user to contract
-        tokenA.transferFrom(msg.sender, address(this), amountAIn);
+        tokenA.safeTransferFrom(msg.sender, address(this), amountAIn);
 
-        // Calculate Token B output using x * y = k
         uint256 amountBOut = (reservoirB * amountAIn) /
             (reservoirA + amountAIn);
+        require(amountBOut >= minAmountBOut, "Slippage too high");
 
-        // Update reserves
         reservoirA += amountAIn;
         reservoirB -= amountBOut;
 
-        // Transfer Token B to user
-        tokenB.transfer(msg.sender, amountBOut);
-
-        // Mint rewardToken to LPs based on swap volume and LP share
         _mintRewards(amountAIn);
+        tokenB.safeTransfer(msg.sender, amountBOut);
 
         emit Swapped(msg.sender, amountAIn, amountBOut, rewardRate);
     }
 
-    // Swap Token B for Token A (with LP rewards)
-    function swapBForA(uint256 amountBIn) external {
+    // Swap Token B for Token A with slippage protection
+    function swapBForA(
+        uint256 amountBIn,
+        uint256 minAmountAOut
+    ) external nonReentrant {
         require(amountBIn > 0, "Amount must be > 0");
 
-        // Transfer Token B from user to contract
-        tokenB.transferFrom(msg.sender, address(this), amountBIn);
+        tokenB.safeTransferFrom(msg.sender, address(this), amountBIn);
 
-        // Calculate Token A output using x * y = k
         uint256 amountAOut = (reservoirA * amountBIn) /
             (reservoirB + amountBIn);
+        require(amountAOut >= minAmountAOut, "Slippage too high");
 
-        // Update reserves
         reservoirB += amountBIn;
         reservoirA -= amountAOut;
 
-        // Transfer Token A to user
-        tokenA.transfer(msg.sender, amountAOut);
-
-        // Mint rewardToken to LPs based on swap volume and LP share
         _mintRewards(amountBIn);
+        tokenA.safeTransfer(msg.sender, amountAOut);
 
         emit Swapped(msg.sender, amountBIn, amountAOut, rewardRate);
     }
 
     // Remove liquidity from the pool
-    function removeLiquidity(uint256 liquidity) external {
+    function removeLiquidity(uint256 liquidity) external nonReentrant {
         require(liquidity > 0, "Liquidity must be > 0");
-
-        // Update rewards before changing LP balance
         _updateReward(msg.sender);
 
-        // Calculate user's share of reserves
-        uint256 amountA = (reservoirA * liquidity) / pooltotalSupply;
-        uint256 amountB = (reservoirB * liquidity) / pooltotalSupply;
+        uint256 amountA = (reservoirA * liquidity) / totalSupply();
+        uint256 amountB = (reservoirB * liquidity) / totalSupply();
 
-        // Burn LP tokens and update reserves
-        lpbalanceOf[msg.sender] -= liquidity;
-        pooltotalSupply -= liquidity;
+        _burn(msg.sender, liquidity);
         reservoirA -= amountA;
         reservoirB -= amountB;
 
-        // Transfer tokens back to user
-        tokenA.transfer(msg.sender, amountA);
-        tokenB.transfer(msg.sender, amountB);
+        tokenA.safeTransfer(msg.sender, amountA);
+        tokenB.safeTransfer(msg.sender, amountB);
 
         emit LiquidityRemoved(msg.sender, amountA, amountB, liquidity);
     }
 
-    // Mint rewards to LPs based on their share and swap volume
+    // Claim accumulated rewards
+    function claimRewards() external nonReentrant {
+        _updateReward(msg.sender);
+        uint256 rewards = pendingRewards[msg.sender];
+        require(rewards > 0, "No rewards");
+
+        pendingRewards[msg.sender] = 0;
+        _mint(msg.sender, rewards);
+        emit RewardsClaimed(msg.sender, rewards);
+    }
+
+    // Reward distribution internal logic
     function _mintRewards(uint256 swapVolume) internal {
-        // Total reward = swapVolume * rewardRate / 1e4 (e.g., 1% of swap volume)
         uint256 totalReward = (swapVolume * rewardRate) / 10000;
-        if (pooltotalSupply > 0 && totalReward > 0) {
-            totalRewardPerShare += (totalReward * 1e18) / pooltotalSupply; // Precision factor
-            _mint(address(this), totalReward); // Mint to contract
+        if (totalSupply() > 0 && totalReward > 0) {
+            totalRewardPerShare += (totalReward * 1e18) / totalSupply();
+            _mint(address(this), totalReward);
         }
     }
 
-    // Function to claim rewards
-    function claimRewards() external {
-        uint256 unclaimed = ((totalRewardPerShare -
-            lastRewardPerShare[msg.sender]) * lpbalanceOf[msg.sender]) / 1e18;
-        require(unclaimed > 0, "No rewards");
-        lastRewardPerShare[msg.sender] = totalRewardPerShare;
-        _transfer(address(this), msg.sender, unclaimed);
+    // Update user's reward tracking
+    function _updateReward(address user) internal {
+        uint256 unclaimed = ((totalRewardPerShare - lastRewardPerShare[user]) *
+            balanceOf(user)) / 1e18;
+        pendingRewards[user] += unclaimed;
+        lastRewardPerShare[user] = totalRewardPerShare;
     }
 
-    // Helper functions
+    // Math utilities
     function sqrt(uint256 x) internal pure returns (uint256 y) {
         uint256 z = (x + 1) / 2;
         y = x;
@@ -206,12 +196,5 @@ contract BasicPool is Ownable, ERC20 {
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;
-    }
-
-    function _updateReward(address user) internal {
-        uint256 accrued = ((totalRewardPerShare - lastRewardPerShare[user]) *
-            lpbalanceOf[user]) / 1e18;
-        pendingRewards[user] += accrued;
-        lastRewardPerShare[user] = totalRewardPerShare;
     }
 }
