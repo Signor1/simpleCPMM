@@ -77,8 +77,6 @@ contract BasicPoolTest is Test {
         pool.addLiquidity(100 ether, 100 ether);
         uint256 initialLp = pool.totalSupply();
 
-        console.log("Initial LP: ", initialLp);
-
         // Second LP
         vm.prank(lps[1]);
         pool.addLiquidity(50 ether, 50 ether);
@@ -89,6 +87,21 @@ contract BasicPoolTest is Test {
             1e16, // 1% tolerance
             "Second LP should get half of initial LP tokens"
         );
+    }
+
+    function test_SwapWithSlippageProtection() public {
+        // Setup liquidity
+        vm.prank(lps[0]);
+        pool.addLiquidity(1000 ether, 1000 ether);
+
+        // Valid swap
+        vm.prank(swappers[0]);
+        pool.swapAForB(100 ether, 90 ether); // Expect at least 90% of ideal output
+
+        // Test slippage failure
+        vm.prank(swappers[1]);
+        vm.expectRevert("Slippage too high");
+        pool.swapAForB(100 ether, 95 ether); // Unrealistic slippage
     }
 
     // Helper function for approximate square root
