@@ -20,6 +20,9 @@ contract BasicPool is Ownable, ERC20 {
     // Track user's LP share
     mapping(address => uint256) public lpbalanceOf;
 
+    // Mapping to store accrued rewards per LP
+    mapping(address => uint256) public pendingRewards;
+
     // Reward rate: 1% of swap volume goes to LPs as rewards
     uint256 private constant rewardRate = 100; // 100 = 1% (1e4 = 100%)
 
@@ -164,10 +167,25 @@ contract BasicPool is Ownable, ERC20 {
 
         // Distribute rewards proportionally to all LPs
         if (pooltotalSupply > 0 && totalReward > 0) {
-            // Distribute to LPs based on their share (simplified example)
-            uint256 rewardPerLP = totalReward / pooltotalSupply;
-            _mint(msg.sender, rewardPerLP * lpbalanceOf[msg.sender]);
+            // Calculate reward per liquidity unit
+            uint256 rewardPerUnit = totalReward / pooltotalSupply;
+
+            // Distribute rewards only to active LPs
+            if (lpbalanceOf[msg.sender] > 0) {
+                pendingRewards[msg.sender] +=
+                    rewardPerUnit *
+                    lpbalanceOf[msg.sender];
+            }
         }
+    }
+
+    // Function to claim rewards
+    function claimRewards() external {
+        uint256 rewards = pendingRewards[msg.sender];
+        require(rewards > 0, "No rewards to claim");
+
+        pendingRewards[msg.sender] = 0;
+        _mint(msg.sender, rewards);
     }
 
     // Helper functions
