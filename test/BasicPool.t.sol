@@ -115,6 +115,32 @@ contract BasicPoolTest is Test {
         pool.swapAForB(100 ether, 95 ether); // Unrealistic slippage
     }
 
+    function test_RewardDistribution() public {
+        // Add liquidity
+        vm.prank(lps[0]);
+        pool.addLiquidity(1000 ether, 1000 ether);
+
+        // Perform swaps
+        uint256 swapAmount = 100 ether;
+        for (uint i = 0; i < swappers.length; i++) {
+            vm.prank(swappers[i]);
+            pool.swapAForB(swapAmount, 1);
+        }
+
+        // Check rewards
+        vm.prank(lps[0]);
+        pool.claimRewards();
+
+        uint256 expectedReward = ((swapAmount * pool.rewardRate()) / 10000) *
+            swappers.length;
+        assertApproxEqRel(
+            pool.balanceOf(lps[0]),
+            expectedReward,
+            1e16, // 1% tolerance
+            "Incorrect reward distribution"
+        );
+    }
+
     // Helper function for approximate square root
     function sqrt(uint256 x) private pure returns (uint256 y) {
         uint256 z = (x + 1) / 2;

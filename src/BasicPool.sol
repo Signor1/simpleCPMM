@@ -22,7 +22,7 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
     uint256 public totalRewardPerShare; // 1e18 precision
     mapping(address => uint256) public lastRewardPerShare;
     mapping(address => uint256) public pendingRewards;
-    uint256 private constant rewardRate = 100; // 1% (1e4 = 100%)
+    uint256 public constant rewardRate = 100; // 1% (1e4 = 100%)
 
     // Constructor
     // ERC20 - Pool Reward Token for rewarding liquidity providers on each swap
