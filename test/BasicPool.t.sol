@@ -28,5 +28,29 @@ contract BasicPoolTest is Test {
         tokenA = new TokenA(address(this));
         tokenB = new TokenB(address(this));
         pool = new BasicPool();
+
+        // Set up tokens in pool
+        pool.setTokenA(address(tokenA));
+        pool.setTokenB(address(tokenB));
+
+        // Fund users
+        uint256 mintAmount = 1000 ether;
+        for (uint i = 0; i < lps.length; i++) {
+            tokenA.mint(lps[i], mintAmount);
+            tokenB.mint(lps[i], mintAmount);
+            vm.prank(lps[i]);
+            tokenA.approve(address(pool), type(uint256).max);
+            vm.prank(lps[i]);
+            tokenB.approve(address(pool), type(uint256).max);
+        }
+
+        for (uint i = 0; i < swappers.length; i++) {
+            tokenA.mint(swappers[i], mintAmount);
+            tokenB.mint(swappers[i], mintAmount);
+            vm.prank(swappers[i]);
+            tokenA.approve(address(pool), type(uint256).max);
+            vm.prank(swappers[i]);
+            tokenB.approve(address(pool), type(uint256).max);
+        }
     }
 }
