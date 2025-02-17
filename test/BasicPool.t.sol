@@ -90,6 +90,12 @@ contract BasicPoolTest is Test {
     }
 
     function test_SwapWithSlippageProtection() public {
+        /*
+        Slippage is basically the difference between the price 
+        you expect to pay/receive for a trade and the actual price 
+        you get when the trade executes.
+        */
+
         // Setup liquidity
         vm.prank(lps[0]);
         pool.addLiquidity(1000 ether, 1000 ether);
