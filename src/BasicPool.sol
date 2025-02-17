@@ -47,4 +47,16 @@ contract BasicPool is Ownable, ERC20 {
         uint256 amountB,
         uint256 liquidity
     );
+
+    // Set Token A address (onlyOwner)
+    function setTokenA(address _tokenA) external onlyOwner {
+        require(_tokenA != address(0), "Invalid address");
+        tokenA = IERC20(_tokenA);
+    }
+
+    // Set Token B address (onlyOwner)
+    function setTokenB(address _tokenB) external onlyOwner {
+        require(_tokenB != address(0), "Invalid address");
+        tokenB = IERC20(_tokenB);
+    }
 }
