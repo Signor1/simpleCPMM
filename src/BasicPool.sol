@@ -21,7 +21,7 @@ contract BasicPool is Ownable, ERC20 {
     mapping(address => uint256) public lpbalanceOf;
 
     // Reward rate: 1% of swap volume goes to LPs as rewards
-    uint256 public rewardRate = 100; // 100 = 1% (1e4 = 100%)
+    uint256 private constant rewardRate = 100; // 100 = 1% (1e4 = 100%)
 
     // Constructor
     // ERC20 - Pool Reward Token for rewarding liquidity providers on each swap
