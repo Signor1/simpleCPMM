@@ -49,31 +49,44 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
 
     constructor() Ownable(msg.sender) ERC20("Pool Reward Token", "PRT") {}
 
-    // Set Token A address (onlyOwner)
     function setTokenA(address _tokenA) external onlyOwner {
         require(_tokenA != address(0), "Invalid address");
         tokenA = IERC20(_tokenA);
     }
 
-    // Set Token B address (onlyOwner)
     function setTokenB(address _tokenB) external onlyOwner {
         require(_tokenB != address(0), "Invalid address");
         tokenB = IERC20(_tokenB);
     }
 
-    // Add liquidity to the pool
     function addLiquidity(
         uint256 amountA,
         uint256 amountB
     ) external nonReentrant {
+        require(
+            address(tokenA) != address(0) && address(tokenB) != address(0),
+            "Tokens not set"
+        );
         require(amountA > 0 && amountB > 0, "Amounts must be > 0");
 
         // Transfer tokens
         tokenA.safeTransferFrom(msg.sender, address(this), amountA);
         tokenB.safeTransferFrom(msg.sender, address(this), amountB);
 
+        // Update pending rewards before changing liquidity
+        _updateUserRewards(msg.sender);
+
         // Calculate liquidity share
-        uint256 liquidity = sqrt(amountA * amountB);
+        uint256 liquidity;
+        if (totalLiquidity == 0) {
+            liquidity = sqrt(amountA * amountB);
+        } else {
+            uint256 liquidityA = (amountA * totalLiquidity) / reservoirA;
+            uint256 liquidityB = (amountB * totalLiquidity) / reservoirB;
+            liquidity = liquidityA < liquidityB ? liquidityA : liquidityB;
+        }
+
+        require(liquidity > 0, "Insufficient liquidity minted");
 
         // Update tracking
         liquidityProvided[msg.sender] += liquidity;
@@ -86,15 +99,16 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
         emit LiquidityAdded(msg.sender, amountA, amountB);
     }
 
-    // Swap Token A for Token B with slippage protection
     function swapAForB(
         uint256 amountAIn,
         uint256 minAmountBOut
     ) external nonReentrant {
         require(amountAIn > 0, "Amount must be > 0");
+        require(reservoirA > 0 && reservoirB > 0, "Insufficient liquidity");
 
         tokenA.safeTransferFrom(msg.sender, address(this), amountAIn);
 
+        // Calculate output amount using constant product formula
         uint256 amountBOut = (reservoirB * amountAIn) /
             (reservoirA + amountAIn);
         require(amountBOut >= minAmountBOut, "Slippage too high");
@@ -111,12 +125,12 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
         emit Swapped(msg.sender, amountAIn, amountBOut, reward);
     }
 
-    // Swap Token B for Token A with slippage protection
     function swapBForA(
         uint256 amountBIn,
         uint256 minAmountAOut
     ) external nonReentrant {
         require(amountBIn > 0, "Amount must be > 0");
+        require(reservoirA > 0 && reservoirB > 0, "Insufficient liquidity");
 
         tokenB.safeTransferFrom(msg.sender, address(this), amountBIn);
 
@@ -136,20 +150,20 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
         emit Swapped(msg.sender, amountBIn, amountAOut, reward);
     }
 
-    // Remove liquidity from the pool
     function removeLiquidity() external nonReentrant {
         uint256 liquidity = liquidityProvided[msg.sender];
         require(liquidity > 0, "No liquidity to remove");
 
-        // Calculate proportional share
+        // Update pending rewards before removing liquidity
+        _updateUserRewards(msg.sender);
+
+        // Calculate share of pool
         uint256 amountA = (reservoirA * liquidity) / totalLiquidity;
         uint256 amountB = (reservoirB * liquidity) / totalLiquidity;
 
-        // Update tracking
+        // Update state before transfers
         liquidityProvided[msg.sender] = 0;
         totalLiquidity -= liquidity;
-
-        // Update reserves
         reservoirA -= amountA;
         reservoirB -= amountB;
 
@@ -160,32 +174,39 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
         emit LiquidityRemoved(msg.sender, amountA, amountB);
     }
 
-    // Claim accumulated rewards
     function claimRewards() external nonReentrant {
+        _updateUserRewards(msg.sender);
+
         uint256 rewards = pendingRewards[msg.sender];
         require(rewards > 0, "No rewards to claim");
 
         pendingRewards[msg.sender] = 0;
         _mint(msg.sender, rewards);
+
         emit RewardsClaimed(msg.sender, rewards);
     }
 
-    // Update reward distribution
     function _updateRewards(uint256 newReward) internal {
         if (totalLiquidity > 0) {
-            uint256 rewardPerLiquidity = (newReward * 1e18) / totalLiquidity;
-            accumulatedRewards += rewardPerLiquidity;
+            accumulatedRewards += (newReward * 1e18) / totalLiquidity;
         }
-
-        uint256 pending = (liquidityProvided[msg.sender] *
-            (accumulatedRewards - rewardDebt[msg.sender])) / 1e18;
-        if (pending > 0) {
-            pendingRewards[msg.sender] += pending;
-        }
-        rewardDebt[msg.sender] = accumulatedRewards;
     }
 
-    // Math utilities
+    function _updateUserRewards(address user) internal {
+        uint256 userLiquidity = liquidityProvided[user];
+        if (userLiquidity > 0) {
+            uint256 pending = (userLiquidity *
+                (accumulatedRewards - rewardDebt[user])) / 1e18;
+            pendingRewards[user] += pending;
+            rewardDebt[user] = accumulatedRewards;
+        }
+    }
+
+    function setRewardRate(uint256 _rewardRate) external onlyOwner {
+        require(_rewardRate <= 10000, "Reward rate too high");
+        rewardRate = _rewardRate;
+    }
+
     function sqrt(uint256 x) internal pure returns (uint256 y) {
         uint256 z = (x + 1) / 2;
         y = x;
@@ -193,5 +214,12 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
             y = z;
             z = (x / z + z) / 2;
         }
+    }
+
+    function emergencyWithdraw(
+        address tokenAddress,
+        uint256 amount
+    ) external onlyOwner {
+        IERC20(tokenAddress).safeTransfer(owner(), amount);
     }
 }

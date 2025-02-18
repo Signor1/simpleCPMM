@@ -112,10 +112,12 @@ contract BasicPoolTest is Test {
     }
 
     function test_RewardDistribution() public {
+        // Add liquidity
         vm.prank(lps[0]);
         pool.addLiquidity(1000 ether, 1000 ether);
 
-        uint256 initialRewards = pool.balanceOf(lps[0]);
+        // Initial balances
+        uint256 initialBalance = pool.balanceOf(lps[0]);
 
         // Perform swaps
         uint256 swapAmount = 100 ether;
@@ -128,12 +130,14 @@ contract BasicPoolTest is Test {
         vm.prank(lps[0]);
         pool.claimRewards();
 
+        // Verify reward distribution
         uint256 expectedReward = ((swapAmount * 100) / 10000) * swappers.length; // 1% per swap
+        assertGt(pool.balanceOf(lps[0]), initialBalance, "No rewards received");
         assertApproxEqRel(
-            pool.balanceOf(lps[0]) - initialRewards,
+            pool.balanceOf(lps[0]) - initialBalance,
             expectedReward,
             1e16, // 1% tolerance
-            "Incorrect reward distribution"
+            "Incorrect reward amount"
         );
     }
 
@@ -158,6 +162,92 @@ contract BasicPoolTest is Test {
             "Should receive Token B back"
         );
         assertEq(pool.liquidityProvided(lps[0]), 0, "Liquidity not cleared");
+    }
+
+    function test_EdgeCases() public {
+        vm.prank(lps[0]);
+        vm.expectRevert("Amounts must be > 0");
+        pool.addLiquidity(0, 100 ether);
+
+        vm.prank(swappers[0]);
+        vm.expectRevert("Amount must be > 0");
+        pool.swapAForB(0, 0);
+
+        vm.prank(lps[0]);
+        vm.expectRevert("No liquidity to remove");
+        pool.removeLiquidity();
+    }
+
+    function test_ComplexScenario() public {
+        // Setup initial liquidity
+        vm.startPrank(lps[0]);
+        pool.addLiquidity(100 ether, 100 ether);
+        vm.stopPrank();
+
+        vm.startPrank(lps[1]);
+        pool.addLiquidity(100 ether, 100 ether);
+        vm.stopPrank();
+
+        vm.startPrank(lps[2]);
+        pool.addLiquidity(100 ether, 100 ether);
+        vm.stopPrank();
+
+        // Record initial states
+        uint256 initialReservoirA = pool.reservoirA();
+        uint256 initialReservoirB = pool.reservoirB();
+
+        // Execute alternating swaps
+        for (uint i = 0; i < 6; i++) {
+            vm.startPrank(swappers[i]);
+            if (i % 2 == 0) {
+                pool.swapAForB(10 ether, 1);
+            } else {
+                pool.swapBForA(10 ether, 1);
+            }
+            vm.stopPrank();
+        }
+
+        // Verify reserves changed
+        assertNotEq(
+            pool.reservoirA(),
+            initialReservoirA,
+            "Reserves A should change"
+        );
+        assertNotEq(
+            pool.reservoirB(),
+            initialReservoirB,
+            "Reserves B should change"
+        );
+
+        // Check and claim rewards for all LPs
+        for (uint i = 0; i < 3; i++) {
+            uint256 initialBalance = pool.balanceOf(lps[i]);
+            vm.prank(lps[i]);
+            pool.claimRewards();
+            assertGt(
+                pool.balanceOf(lps[i]),
+                initialBalance,
+                "LP should receive rewards"
+            );
+        }
+
+        // Remove liquidity for first LP
+        uint256 initialTokenABalance = tokenA.balanceOf(lps[0]);
+        uint256 initialTokenBBalance = tokenB.balanceOf(lps[0]);
+
+        vm.prank(lps[0]);
+        pool.removeLiquidity();
+
+        assertGt(
+            tokenA.balanceOf(lps[0]),
+            initialTokenABalance,
+            "Should receive Token A back"
+        );
+        assertGt(
+            tokenB.balanceOf(lps[0]),
+            initialTokenBBalance,
+            "Should receive Token B back"
+        );
     }
 
     // Helper function for approximate square root
