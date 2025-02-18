@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract BasicPool is Ownable, ERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -18,23 +18,21 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
     uint256 public reservoirA;
     uint256 public reservoirB;
 
-    // Reward tracking
-    uint256 public totalRewardPerShare; // 1e18 precision
-    mapping(address => uint256) public lastRewardPerShare;
-    mapping(address => uint256) public pendingRewards;
-    uint256 public constant rewardRate = 100; // 1% (1e4 = 100%)
+    // Liquidity tracking
+    mapping(address => uint256) public liquidityProvided;
+    uint256 public totalLiquidity;
 
-    // Constructor
-    // ERC20 - Pool Reward Token for rewarding liquidity providers on each swap
-    // Ownable - Pool is owned by the deployer, access to some functions controlled by Ownable
-    constructor() ERC20("Pool LP Token", "PLP") Ownable(msg.sender) {}
+    // Reward tracking
+    uint256 public accumulatedRewards;
+    uint256 public rewardRate = 100; // 1% (1e4 = 100%)
+    mapping(address => uint256) public pendingRewards;
+    mapping(address => uint256) public rewardDebt;
 
     // Events
     event LiquidityAdded(
         address indexed user,
         uint256 amountA,
-        uint256 amountB,
-        uint256 liquidity
+        uint256 amountB
     );
     event Swapped(
         address indexed user,
@@ -45,10 +43,11 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
     event LiquidityRemoved(
         address indexed user,
         uint256 amountA,
-        uint256 amountB,
-        uint256 liquidity
+        uint256 amountB
     );
     event RewardsClaimed(address indexed user, uint256 amount);
+
+    constructor() Ownable(msg.sender) ERC20("Pool Reward Token", "PRT") {}
 
     // Set Token A address (onlyOwner)
     function setTokenA(address _tokenA) external onlyOwner {
@@ -69,29 +68,22 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
     ) external nonReentrant {
         require(amountA > 0 && amountB > 0, "Amounts must be > 0");
 
-        _updateReward(msg.sender);
-
         // Transfer tokens
         tokenA.safeTransferFrom(msg.sender, address(this), amountA);
         tokenB.safeTransferFrom(msg.sender, address(this), amountB);
 
-        // Calculate LP tokens
-        uint256 liquidity;
-        if (totalSupply() == 0) {
-            liquidity = sqrt(amountA * amountB);
-        } else {
-            liquidity = min(
-                (amountA * totalSupply()) / reservoirA,
-                (amountB * totalSupply()) / reservoirB
-            );
-        }
+        // Calculate liquidity share
+        uint256 liquidity = sqrt(amountA * amountB);
 
-        // Update reserves and mint LP tokens
+        // Update tracking
+        liquidityProvided[msg.sender] += liquidity;
+        totalLiquidity += liquidity;
+
+        // Update reserves
         reservoirA += amountA;
         reservoirB += amountB;
-        _mint(msg.sender, liquidity);
 
-        emit LiquidityAdded(msg.sender, amountA, amountB, liquidity);
+        emit LiquidityAdded(msg.sender, amountA, amountB);
     }
 
     // Swap Token A for Token B with slippage protection
@@ -107,13 +99,16 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
             (reservoirA + amountAIn);
         require(amountBOut >= minAmountBOut, "Slippage too high");
 
+        // Update reserves
         reservoirA += amountAIn;
         reservoirB -= amountBOut;
 
-        _mintRewards(amountAIn);
-        tokenB.safeTransfer(msg.sender, amountBOut);
+        // Calculate and distribute rewards
+        uint256 reward = (amountAIn * rewardRate) / 10000;
+        _updateRewards(reward);
 
-        emit Swapped(msg.sender, amountAIn, amountBOut, rewardRate);
+        tokenB.safeTransfer(msg.sender, amountBOut);
+        emit Swapped(msg.sender, amountAIn, amountBOut, reward);
     }
 
     // Swap Token B for Token A with slippage protection
@@ -129,59 +124,65 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
             (reservoirB + amountBIn);
         require(amountAOut >= minAmountAOut, "Slippage too high");
 
+        // Update reserves
         reservoirB += amountBIn;
         reservoirA -= amountAOut;
 
-        _mintRewards(amountBIn);
-        tokenA.safeTransfer(msg.sender, amountAOut);
+        // Calculate and distribute rewards
+        uint256 reward = (amountBIn * rewardRate) / 10000;
+        _updateRewards(reward);
 
-        emit Swapped(msg.sender, amountBIn, amountAOut, rewardRate);
+        tokenA.safeTransfer(msg.sender, amountAOut);
+        emit Swapped(msg.sender, amountBIn, amountAOut, reward);
     }
 
     // Remove liquidity from the pool
-    function removeLiquidity(uint256 liquidity) external nonReentrant {
-        require(liquidity > 0, "Liquidity must be > 0");
-        _updateReward(msg.sender);
+    function removeLiquidity() external nonReentrant {
+        uint256 liquidity = liquidityProvided[msg.sender];
+        require(liquidity > 0, "No liquidity to remove");
 
-        uint256 amountA = (reservoirA * liquidity) / totalSupply();
-        uint256 amountB = (reservoirB * liquidity) / totalSupply();
+        // Calculate proportional share
+        uint256 amountA = (reservoirA * liquidity) / totalLiquidity;
+        uint256 amountB = (reservoirB * liquidity) / totalLiquidity;
 
-        _burn(msg.sender, liquidity);
+        // Update tracking
+        liquidityProvided[msg.sender] = 0;
+        totalLiquidity -= liquidity;
+
+        // Update reserves
         reservoirA -= amountA;
         reservoirB -= amountB;
 
+        // Transfer tokens
         tokenA.safeTransfer(msg.sender, amountA);
         tokenB.safeTransfer(msg.sender, amountB);
 
-        emit LiquidityRemoved(msg.sender, amountA, amountB, liquidity);
+        emit LiquidityRemoved(msg.sender, amountA, amountB);
     }
 
     // Claim accumulated rewards
     function claimRewards() external nonReentrant {
-        _updateReward(msg.sender);
         uint256 rewards = pendingRewards[msg.sender];
-        require(rewards > 0, "No rewards");
+        require(rewards > 0, "No rewards to claim");
 
         pendingRewards[msg.sender] = 0;
         _mint(msg.sender, rewards);
         emit RewardsClaimed(msg.sender, rewards);
     }
 
-    // Reward distribution internal logic
-    function _mintRewards(uint256 swapVolume) internal {
-        uint256 totalReward = (swapVolume * rewardRate) / 10000;
-        if (totalSupply() > 0 && totalReward > 0) {
-            totalRewardPerShare += (totalReward * 1e18) / totalSupply();
-            _mint(address(this), totalReward);
+    // Update reward distribution
+    function _updateRewards(uint256 newReward) internal {
+        if (totalLiquidity > 0) {
+            uint256 rewardPerLiquidity = (newReward * 1e18) / totalLiquidity;
+            accumulatedRewards += rewardPerLiquidity;
         }
-    }
 
-    // Update user's reward tracking
-    function _updateReward(address user) internal {
-        uint256 unclaimed = ((totalRewardPerShare - lastRewardPerShare[user]) *
-            balanceOf(user)) / 1e18;
-        pendingRewards[user] += unclaimed;
-        lastRewardPerShare[user] = totalRewardPerShare;
+        uint256 pending = (liquidityProvided[msg.sender] *
+            (accumulatedRewards - rewardDebt[msg.sender])) / 1e18;
+        if (pending > 0) {
+            pendingRewards[msg.sender] += pending;
+        }
+        rewardDebt[msg.sender] = accumulatedRewards;
     }
 
     // Math utilities
@@ -192,9 +193,5 @@ contract BasicPool is Ownable, ERC20, ReentrancyGuard {
             y = z;
             z = (x / z + z) / 2;
         }
-    }
-
-    function min(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a < b ? a : b;
     }
 }
