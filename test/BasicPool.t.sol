@@ -250,6 +250,33 @@ contract BasicPoolTest is Test {
         );
     }
 
+    // Owner functionality tests
+    function test_OwnerFunctions() public {
+        // Test token setting
+        address newTokenA = address(0x123);
+        address newTokenB = address(0x456);
+
+        pool.setTokenA(newTokenA);
+        pool.setTokenB(newTokenB);
+
+        assertEq(address(pool.tokenA()), newTokenA);
+        assertEq(address(pool.tokenB()), newTokenB);
+
+        // Test reward rate setting
+        pool.setRewardRate(200); // Set to 2%
+        assertEq(pool.rewardRate(), 200);
+
+        // Test invalid reward rate
+        vm.expectRevert("Reward rate too high");
+        pool.setRewardRate(20000);
+
+        // Test emergency withdraw
+        tokenA.mint(address(pool), 100 ether);
+        uint256 initialBalance = tokenA.balanceOf(pool.owner());
+        pool.emergencyWithdraw(address(tokenA), 100 ether);
+        assertEq(tokenA.balanceOf(pool.owner()), initialBalance + 100 ether);
+    }
+
     // Helper function for approximate square root
     function sqrt(uint256 x) private pure returns (uint256 y) {
         uint256 z = (x + 1) / 2;
