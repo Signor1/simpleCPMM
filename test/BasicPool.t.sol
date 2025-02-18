@@ -55,35 +55,31 @@ contract BasicPoolTest is Test {
     }
 
     function test_AddLiquidity() public {
-        // Test initial liquidity addition
-        uint256 amountA = 100 ether;
-        uint256 amountB = 100 ether;
-
         vm.prank(lps[0]);
-        pool.addLiquidity(amountA, amountB);
+        pool.addLiquidity(100 ether, 100 ether);
 
+        assertEq(pool.reservoirA(), 100 ether, "Incorrect Token A reserve");
+        assertEq(pool.reservoirB(), 100 ether, "Incorrect Token B reserve");
         assertEq(
-            pool.totalSupply(),
-            sqrt(amountA * amountB),
-            "Incorrect initial LP tokens"
+            pool.liquidityProvided(lps[0]),
+            sqrt(100 ether * 100 ether),
+            "Incorrect liquidity tracking"
         );
-        assertEq(pool.reservoirA(), amountA, "Incorrect Token A reserve");
-        assertEq(pool.reservoirB(), amountB, "Incorrect Token B reserve");
     }
 
     function test_MultipleLiquidityProviders() public {
         // First LP
         vm.prank(lps[0]);
         pool.addLiquidity(100 ether, 100 ether);
-        uint256 initialLp = pool.totalSupply();
+        uint256 initialAmountOfLP = pool.liquidityProvided(lps[0]);
 
         // Second LP
         vm.prank(lps[1]);
         pool.addLiquidity(50 ether, 50 ether);
 
         assertApproxEqRel(
-            pool.balanceOf(lps[1]),
-            initialLp / 2,
+            pool.liquidityProvided(lps[1]),
+            initialAmountOfLP / 2,
             1e16, // 1% tolerance
             "Second LP should get half of initial LP tokens"
         );
@@ -116,9 +112,10 @@ contract BasicPoolTest is Test {
     }
 
     function test_RewardDistribution() public {
-        // Add liquidity
         vm.prank(lps[0]);
         pool.addLiquidity(1000 ether, 1000 ether);
+
+        uint256 initialRewards = pool.balanceOf(lps[0]);
 
         // Perform swaps
         uint256 swapAmount = 100 ether;
@@ -127,18 +124,40 @@ contract BasicPoolTest is Test {
             pool.swapAForB(swapAmount, 1);
         }
 
-        // Check rewards
+        // Claim rewards
         vm.prank(lps[0]);
         pool.claimRewards();
 
-        uint256 expectedReward = ((swapAmount * pool.rewardRate()) / 10000) *
-            swappers.length;
+        uint256 expectedReward = ((swapAmount * 100) / 10000) * swappers.length; // 1% per swap
         assertApproxEqRel(
-            pool.balanceOf(lps[0]),
+            pool.balanceOf(lps[0]) - initialRewards,
             expectedReward,
             1e16, // 1% tolerance
             "Incorrect reward distribution"
         );
+    }
+
+    function test_RemoveLiquidity() public {
+        vm.prank(lps[0]);
+        pool.addLiquidity(1000 ether, 1000 ether);
+
+        uint256 initialBalanceA = tokenA.balanceOf(lps[0]);
+        uint256 initialBalanceB = tokenB.balanceOf(lps[0]);
+
+        vm.prank(lps[0]);
+        pool.removeLiquidity();
+
+        assertGt(
+            tokenA.balanceOf(lps[0]),
+            initialBalanceA,
+            "Should receive Token A back"
+        );
+        assertGt(
+            tokenB.balanceOf(lps[0]),
+            initialBalanceB,
+            "Should receive Token B back"
+        );
+        assertEq(pool.liquidityProvided(lps[0]), 0, "Liquidity not cleared");
     }
 
     // Helper function for approximate square root
