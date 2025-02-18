@@ -277,6 +277,56 @@ contract BasicPoolTest is Test {
         assertEq(tokenA.balanceOf(pool.owner()), initialBalance + 100 ether);
     }
 
+    // Price impact and slippage tests
+    function test_PriceImpact() public {
+        // Setup initial liquidity
+        vm.prank(lps[0]);
+        pool.addLiquidity(1000 ether, 1000 ether);
+
+        // Small swap (10 ETH)
+        vm.startPrank(swappers[0]);
+        uint256 smallSwapOut = getSwapAmount(10 ether, true);
+        pool.swapAForB(10 ether, smallSwapOut);
+        vm.stopPrank();
+
+        // Medium swap (100 ETH)
+        vm.startPrank(swappers[1]);
+        uint256 mediumSwapOut = getSwapAmount(100 ether, true);
+        pool.swapAForB(100 ether, mediumSwapOut);
+        vm.stopPrank();
+
+        // Large swap (500 ETH)
+        vm.startPrank(swappers[2]);
+        uint256 largeSwapOut = getSwapAmount(500 ether, true);
+        pool.swapAForB(500 ether, largeSwapOut);
+        vm.stopPrank();
+
+        console.log(
+            "Small swap rate (output per input unit):",
+            (smallSwapOut * 1e18) / 10 ether
+        );
+        console.log(
+            "Medium swap rate (output per input unit):",
+            (mediumSwapOut * 1e18) / 100 ether
+        );
+        console.log(
+            "Large swap rate (output per input unit):",
+            (largeSwapOut * 1e18) / 500 ether
+        );
+
+        // Verify price impact increases (rate decreases) with swap size
+        assertGt(
+            (smallSwapOut * 1e18) / 10 ether, // Rate for small swap
+            (mediumSwapOut * 1e18) / 100 ether, // Rate for medium swap
+            "Medium swap should have higher price impact (lower rate)"
+        );
+        assertGt(
+            (mediumSwapOut * 1e18) / 100 ether, // Rate for medium swap
+            (largeSwapOut * 1e18) / 500 ether, // Rate for large swap
+            "Large swap should have higher price impact (lower rate)"
+        );
+    }
+
     // Helper function for approximate square root
     function sqrt(uint256 x) private pure returns (uint256 y) {
         uint256 z = (x + 1) / 2;
@@ -284,6 +334,20 @@ contract BasicPoolTest is Test {
         while (z < y) {
             y = z;
             z = (x / z + z) / 2;
+        }
+    }
+
+    // Helper function to calculate expected swap amount
+    function getSwapAmount(
+        uint256 amountIn,
+        bool isAtoB
+    ) internal view returns (uint256) {
+        if (isAtoB) {
+            return
+                (pool.reservoirB() * amountIn) / (pool.reservoirA() + amountIn);
+        } else {
+            return
+                (pool.reservoirA() * amountIn) / (pool.reservoirB() + amountIn);
         }
     }
 }
