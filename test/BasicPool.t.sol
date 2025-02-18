@@ -327,6 +327,31 @@ contract BasicPoolTest is Test {
         );
     }
 
+    // Test extreme scenarios
+    function test_RapidSwaps() public {
+        // Test with very small amounts
+        vm.prank(lps[0]);
+        pool.addLiquidity(1, 1);
+
+        vm.prank(swappers[0]);
+        pool.swapAForB(1, 0);
+
+        // Test with very large amounts
+        vm.prank(lps[1]);
+        pool.addLiquidity(1000 ether, 1000 ether);
+
+        vm.prank(swappers[1]);
+        pool.swapAForB(900 ether, 1);
+
+        // Test rapid swaps
+        vm.startPrank(swappers[2]);
+        for (uint i = 0; i < 10; i++) {
+            pool.swapAForB(1 ether, 0);
+            pool.swapBForA(1 ether, 0);
+        }
+        vm.stopPrank();
+    }
+
     // Helper function for approximate square root
     function sqrt(uint256 x) private pure returns (uint256 y) {
         uint256 z = (x + 1) / 2;
