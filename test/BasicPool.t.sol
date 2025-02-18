@@ -352,6 +352,32 @@ contract BasicPoolTest is Test {
         vm.stopPrank();
     }
 
+    // Test concurrent operations
+    function test_ConcurrentOperations() public {
+        // Setup initial state
+        vm.prank(lps[0]);
+        pool.addLiquidity(1000 ether, 1000 ether);
+
+        // Simultaneous operations
+        for (uint i = 1; i < 3; i++) {
+            // Add liquidity
+            vm.prank(lps[i]);
+            pool.addLiquidity(100 ether, 100 ether);
+
+            // Perform swap
+            vm.prank(swappers[i]);
+            pool.swapAForB(50 ether, 1);
+
+            // Claim rewards
+            vm.prank(lps[i]);
+            pool.claimRewards();
+        }
+
+        // Remove liquidity while others are active
+        vm.prank(lps[0]);
+        pool.removeLiquidity();
+    }
+
     // Helper function for approximate square root
     function sqrt(uint256 x) private pure returns (uint256 y) {
         uint256 z = (x + 1) / 2;
